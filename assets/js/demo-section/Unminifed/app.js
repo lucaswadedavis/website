@@ -165,40 +165,6 @@ angular
             editor.$blockScrolling = Infinity;
         };
 
-        // TODO: time to break this file into multiple independent components.
-        $scope.typeahead_cache = [];
-        $scope.typeahead_cache_indices = {};
-
-        $scope.found_entity = function(data) {
-            var index = $scope.typeahead_cache_indices[data.name];
-            if (index == undefined) {
-                $scope.typeahead_cache_indices[data.name] =
-                    $scope.typeahead_cache.length;
-                $scope.typeahead_cache.push(data);
-            } else {
-                var cached = $scope.typeahead_cache[index];
-                cached.xid = cached.xid || data.xid;
-                cached.uid = cached.uid || data.uid;
-            }
-        };
-
-        $scope.$watch("active_tab.code", function(newCode) {
-            if (!newCode) {
-                return;
-            }
-            var newXID = newCode.match(/me\s*\(\s*_xid_\s*:\s*([^\s]*)\s*\)/);
-            if (newXID && newXID[1]) {
-                $scope.entity_selected("xid", newXID[1]);
-                return;
-            }
-
-            var newUID = newCode.match(/me\s*\(\s*_uid_\s*:\s*([^\s]*)\s*\)/);
-            if (newUID && newUID[1]) {
-                $scope.entity_selected("uid", newUID[1]);
-                return;
-            }
-        });
-
         $scope.entity_selected = function(field, value) {
             for (var i = 0; i < $scope.typeahead_cache.length; i++) {
                 if ($scope.typeahead_cache[i][field] == value) {
@@ -208,6 +174,10 @@ angular
             }
             $scope.typeahead_root_id = undefined;
         };
+
+        function isDefaultQuery() {
+            return $scope.active_tab.code === $scope.active_tab.sample_code;
+        }
 
         $scope.runQuery = function(query) {
             var startTime = Date.now();
@@ -223,6 +193,7 @@ angular
                     $scope.lastReceivedVersion = currentCodeVersion;
 
                     var keys = Object.keys(response.data);
+
                     var key = "";
                     for (var i = 0; i < keys.length; i++) {
                         if (keys[i] != "server_latency" && keys[i] != "uids") {
@@ -232,6 +203,21 @@ angular
                     }
 
                     if (key === "") {
+                        if (isDefaultQuery()) {
+                            Raven.captureMessage(
+                                "No result returned for default query",
+                                {
+                                    extra: { query: query }
+                                }
+                            );
+                            $scope.json_result = "{}";
+                            // If its the default query and we did not get any results, that means
+                            // data was not loaded properly.
+                            return;
+                        }
+                        $scope.json_result = "{}";
+                        // If its the default query and we did not get any results, that means
+                        // data was not loaded properly.
                         return;
                     }
 
@@ -257,8 +243,20 @@ angular
                     }
                 },
                 function(error) {
-                    console.log(error);
-                    $scope.had_network_error = true;
+                    if (error.status !== 400) {
+                        $scope.had_network_error = true;
+                        return;
+                    }
+                    $scope.lastReceivedVersion = currentCodeVersion;
+                    $scope.json_result = JSON.stringify(error.data, null, 2);
+                    if (isDefaultQuery()) {
+                        Raven.captureMessage(
+                            "Error while running default query",
+                            {
+                                extra: { query: query, error: error.data }
+                            }
+                        );
+                    }
                 }
             );
         };
